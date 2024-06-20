@@ -1,0 +1,165 @@
+---
+title: "IFdosingStats - 20 trial blocks"
+output: html_document
+usage: You must make sure the Rdata files from "interferenceDosing_stats.R" have been sucessfully run, and that the stats files are in the "R output files" folder on the drive. Make sure you have set blocksize = 20
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(ez)
+setwd("/Volumes/mnl/Data/Adaptation/interference_dosing/R output files/20 trial blocks")
+load(file = "lhKinematics_stats.Rdata") # Currently blocked by 20 trials
+load(file = "rhKinematics_stats.Rdata")
+```
+
+# Baseline Phases - NON-standardized
+## Left hand
+### IDE_c VB
+```{r, echo=FALSE}
+# IDE - Visual Baseline
+ezANOVA(subset(lhKinematics_stats, block %in% c(1)), dv = ide_c, between = group, wid = subjectID)
+```
+
+### EP_X_c VB
+```{r, echo=FALSE}
+# EPX - Visual Baseline
+ezANOVA(subset(lhKinematics_stats, block %in% c(1)), dv = EP_X_c, between = group, wid = subjectID)
+```
+
+### IDE_c KB
+```{r, echo=FALSE}
+# IDE - Kin Baseline
+ezANOVA(subset(lhKinematics_stats, block %in% c(2)), dv = ide_c, between = group, wid = subjectID)
+```
+
+### EP_X_c KB
+```{r, echo=FALSE}
+# EPX - Kin Baseline
+ezANOVA(subset(lhKinematics_stats, block %in% c(2)), dv = EP_X_c, between = group, wid = subjectID)
+```
+
+## Right Hand
+### IDE_c VB
+```{r, echo=FALSE}
+# IDE - Visual Baseline
+ezANOVA(subset(rhKinematics_stats, block %in% c(1)), dv = ide_c, between = group, wid = subjectID)
+```
+
+### EP_X_c VB
+```{r, echo=FALSE}
+# EPX - Visual Baseline
+ezANOVA(subset(rhKinematics_stats, block %in% c(1)), dv = EP_X_c, between = group, wid = subjectID)
+```
+
+### IDE_c KB
+```{r, echo=FALSE}
+# IDE - Kin Baseline
+ezANOVA(subset(rhKinematics_stats, block %in% c(2)), dv = ide_c, between = group, wid = subjectID)
+```
+
+### EP_X_c KB
+```{r, echo=FALSE}
+# EPX - Kin Baseline
+ezANOVA(subset(rhKinematics_stats, block %in% c(2)), dv = EP_X_c, between = group, wid = subjectID)
+```
+
+# Exposure Phases - Middle and End
+## Left hand
+### IDE_c EX
+```{r, echo=FALSE}
+# IDE - Exposure
+ezANOVA(subset(lhKinematics_stats, block %in% c(6,9)), dv = ide_c, within = block, between = group, wid = subjectID)
+```
+
+### EP_X_c EX
+```{r, echo=FALSE}
+# EPX - Exposure
+ezANOVA(subset(lhKinematics_stats, block %in% c(6,9)), dv = EP_X_c, within = block, between = group, wid = subjectID)
+```
+
+
+## Right Hand
+### IDE_c EX
+```{r, echo=FALSE}
+# IDE - Exposure
+ezANOVA(subset(rhKinematics_stats, block %in% c(6,9)), dv = ide_c, within = block, between = group, wid = subjectID)
+```
+
+### EP_X_c EX
+```{r, echo=FALSE}
+# EPX - Exposure
+ezANOVA(subset(rhKinematics_stats, block %in% c(6,9)), dv = EP_X_c, within = block, between = group, wid = subjectID)
+```
+
+# Post-Exposure Phases
+## Left hand
+### IDE_c PE
+```{r, echo=FALSE}
+# IDE - Post-Exposure
+ezANOVA(subset(lhKinematics_stats, block %in% c(10,11)), dv = ide_c, within = block, between = group, wid = subjectID)
+```
+
+### EP_X_c PE
+```{r, echo=FALSE}
+# EPX - Post-Exposure
+ezANOVA(subset(lhKinematics_stats, block %in% c(10,11)), dv = EP_X_c, within = block, between = group, wid = subjectID)
+```
+
+
+## Right Hand
+### IDE_c PE
+```{r, echo=FALSE}
+# IDE - Post-Exposure
+ezANOVA(subset(rhKinematics_stats, block %in% c(10,11)), dv = ide_c, within = block, between = group, wid = subjectID)
+```
+
+### EP_X_c PE
+```{r, echo=FALSE}
+# EPX - Post-Exposure
+ezANOVA(subset(rhKinematics_stats, block %in% c(10,11)), dv = EP_X_c, within = block, between = group, wid = subjectID)
+```
+
+# LFoff_FS Data
+## Vis Baseline
+```{r, echo=FALSE}
+ezANOVA(subset(lhKinematics_stats, block %in% c(1)), dv = LFoff_FS_c,  between = group, wid = subjectID)
+```
+
+## Kin Baseline
+```{r, echo=FALSE}
+ezANOVA(subset(lhKinematics_stats, block %in% c(2)), dv = LFoff_FS_c, between = group, wid = subjectID)
+```
+
+## Exposure Middle-End
+```{r, echo=FALSE}
+ezANOVA(subset(lhKinematics_stats, block %in% c(6,9)), dv = LFoff_FS_c, within = block, between = group, wid = subjectID)
+```
+
+## Post-Exposure
+```{r, echo=FALSE}
+ezANOVA(subset(lhKinematics_stats, block %in% c(10,11)), dv = LFoff_FS_c, within = block, between = group, wid = subjectID)
+```
+
+# LFoff.bc Data
+## Vis Baseline
+```{r, echo=FALSE}
+ezANOVA(subset(lhKinematics_stats, block %in% c(1)), dv = LFoff.bc,  between = group, wid = subjectID)
+```
+
+## Kin Baseline
+```{r, echo=FALSE}
+#ezANOVA(subset(lhKinematics_stats, block %in% c(2)), dv = LFoff.bc, between = group, wid = subjectID) # Need to comment this out because residual sum of squares is zero (ie: no sig diff)
+```
+
+## Exposure Middle-End
+```{r, echo=FALSE}
+ezANOVA(subset(lhKinematics_stats, block %in% c(6,9)), dv = LFoff.bc, within = block, between = group, wid = subjectID)
+```
+
+## Post-Exposure
+```{r, echo=FALSE}
+ezANOVA(subset(lhKinematics_stats, block %in% c(10,11)), dv = LFoff.bc, within = block, between = group, wid = subjectID)
+```

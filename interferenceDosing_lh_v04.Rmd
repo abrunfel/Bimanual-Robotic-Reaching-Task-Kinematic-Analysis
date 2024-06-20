@@ -1,0 +1,345 @@
+ ---
+title: "InterferenceDosing"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+
+```
+## Install new packages
+```{r}
+#install.packages('plotrix')
+#install.packages("grid")
+#install.packages("reshape")
+#install.packages("ez")
+#install.packages("Cairo")
+```
+## Load packages
+```{r Load packages}
+library(plyr)
+library(ggplot2)
+library(plotrix)
+library(dplyr)
+library(grid)
+library(gridExtra)
+library(lattice)
+library(reshape)
+library(ez)
+```
+## Column rearranger
+```{r}
+##arrange df vars by position
+##'vars' must be a named vector, e.g. c("var.name"=1)
+arrange.vars <- function(data, vars){
+    ##stop if not a data.frame (but should work for matrices as well)
+    stopifnot(is.data.frame(data))
+
+    ##sort out inputs
+    data.nms <- names(data)
+    var.nr <- length(data.nms)
+    var.nms <- names(vars)
+    var.pos <- vars
+    ##sanity checks
+    stopifnot( !any(duplicated(var.nms)), 
+               !any(duplicated(var.pos)) )
+    stopifnot( is.character(var.nms), 
+               is.numeric(var.pos) )
+    stopifnot( all(var.nms %in% data.nms) )
+    stopifnot( all(var.pos > 0), 
+               all(var.pos <= var.nr) )
+
+    ##prepare output
+    out.vec <- character(var.nr)
+    out.vec[var.pos] <- var.nms
+    out.vec[-var.pos] <- data.nms[ !(data.nms %in% var.nms) ]
+    stopifnot( length(out.vec)==var.nr )
+
+    ##re-arrange vars by position
+    data <- data[ , out.vec]
+    return(data)
+}
+```
+## Load in Data
+```{r Load in Data, include=FALSE}
+setwd("/Volumes/mnl/Data/Adaptation/interference_dosing/Post_Step_3") # Mac
+#setwd("Z:\\Data\\Adaptation\\interference_dosing\\Post_Step_3") # PC
+lhData = read.delim('lh_raw',header = FALSE, sep = ",", na.strings = 'NaN')
+
+numGroup = 3 # Number of groups (works only for my current dataset)
+
+colnames(lhData) = c('group', 'subjectID', 'trial', 'target_theta',
+                     'MT', 'MT_c', 'MT_st',
+                     'rmse', 'rmse_c', 'rmse_st',
+                     'ide', 'ide_c', 'ide_st',
+                     'norm_jerk', 'norm_jerk_c', 'norm_jerk_st',
+                     'mov_int', 'mov_int_c', 'mov_int_st',
+                     'EPE', 'EPE_c', 'EPE_st',
+                     'EP_X', 'EP_X_c', 'EP_X_st',
+                     'EP_Y', 'EP_Y_c', 'EP_Y_st',
+                     'end_X_pos', 'end_Y_pos',
+                     'tstamp_start', 'tstamp_end',
+                     'velPeak', 'velPeak_c', 'velPeak_st',
+                     'velPeakTime', 'velPeakTime_c', 'velPeakTime_st',
+                     'RT', 'RT_c', 'RT_st',
+                     'LFoff_FS', 'LFoff_FS_c', 'LFoff_FS_st',
+                     'LFoff_CMD', 'LFoff_CMD_c', 'LFoff_CMD_st',
+                     'LFvp_FS', 'LFvp_FS_c', 'LFvp_FS_st',
+                     'LFvp_CMD', 'LFvp_CMD_c', 'LFvp_CMD_st',
+                     'wrong_trial')
+
+factors = c('group', 'subjectID')
+lhData[,factors] = lapply(lhData[,factors], factor)
+
+# This will get rid of oulier subjects BEFORE generating the dataset to follow.
+outliers = c(0)
+#outliers = c(103,106,108,205,303) # Type the id of the subjects you wish to remove
+
+for (i in 1:length(outliers)){
+lhData = subset(lhData, lhData$subjectID != outliers[i])
+}
+numSub = nrow(lhData)/222 # number of subjects in the data.frame (scrubbed of outliers)
+
+# Remove trials 41, 42 for each subject
+lhData = lhData[-(which(lhData$trial %in% c(41,42))),]
+
+# Reflect EP_X UP trials across the y-axis. This will cause all ISO participants to have + values, and all MIRROR particpants to have - values
+lhData$target_theta = as.character(lhData$target_theta)
+lhData$target_theta = revalue(lhData$target_theta, c("4.712389" = "down", "1.570796" = "up"))
+
+# Instead of reflecting EP_X UP trials, lets take the ABS of both EP_X and ide values (this will correct for mirror and iso participants, allowing us to use everyone)
+lhData[c("ide", "ide_c", "ide_st", "EP_X", "EP_X_c", "EP_X_st", "LFoff_FS", "LFoff_FS_c", "LFoff_FS_st", "LFoff_CMD", "LFoff_CMD_c", "LFoff_CMD_st", "LFvp_FS", "LFvp_FS_c", "LFvp_FS_st", "LFvp_CMD", "LFvp_CMD_c", "LFvp_CMD_st")] = lapply(lhData[c("ide", "ide_c", "ide_st", "EP_X", "EP_X_c", "EP_X_st", "LFoff_FS", "LFoff_FS_c", "LFoff_FS_st", "LFoff_CMD", "LFoff_CMD_c", "LFoff_CMD_st", "LFvp_FS", "LFvp_FS_c", "LFvp_FS_st", "LFvp_CMD", "LFvp_CMD_c", "LFvp_CMD_st")], function(x) abs(x))
+
+# There is a KB difference in LFoff_FS_c. I will make a new variable (LFoff.bc) that subtracts the mean of all KB trials from all values.
+temp = lhData %>% select(c(group, subjectID, trial, LFoff_FS_c)) %>% filter(trial %in% 21:40) %>% group_by(subjectID) %>% summarise(avg.LFoff.kb = mean(LFoff_FS_c, na.rm = TRUE))
+temp2 = data.frame(matrix(ncol = 2, nrow = numSub*220))
+for(i in 1:numSub){
+  temp2$X1[(220*(i-1)+1):(220*i)] = rep(temp$subjectID[i],220)
+  temp2$X2[(220*(i-1)+1):(220*i)] = rep(temp$avg.LFoff.kb[i],220)
+}
+lhData$LFoff.bc = lhData$LFoff_FS_c - temp2$X2
+
+# Do the same thing for LFvp_FS_c
+temp = lhData %>% select(c(group, subjectID, trial, LFvp_FS_c)) %>% filter(trial %in% 21:40) %>% group_by(subjectID) %>% summarise(avg.LFvp.kb = mean(LFvp_FS_c, na.rm = TRUE))
+temp2 = data.frame(matrix(ncol = 2, nrow = numSub*220))
+for(i in 1:numSub){
+  temp2$X1[(220*(i-1)+1):(220*i)] = rep(temp$subjectID[i],220)
+  temp2$X2[(220*(i-1)+1):(220*i)] = rep(temp$avg.LFvp.kb[i],220)
+}
+lhData$LFvp.bc = lhData$LFvp_FS_c - temp2$X2
+
+# Do the same thing for ide_c
+temp = lhData %>% select(c(group, subjectID, trial, ide_c)) %>% filter(trial %in% 21:40) %>% group_by(subjectID) %>% summarise(avg.ide.kb = mean(ide_c, na.rm = TRUE))
+temp2 = data.frame(matrix(ncol = 2, nrow = numSub*220))
+for(i in 1:numSub){
+  temp2$X1[(220*(i-1)+1):(220*i)] = rep(temp$subjectID[i],220)
+  temp2$X2[(220*(i-1)+1):(220*i)] = rep(temp$avg.ide.kb[i],220)
+}
+lhData$ide.bc = lhData$ide_c - temp2$X2
+
+# Do the same thing for EP_X_c
+temp = lhData %>% select(c(group, subjectID, trial, EP_X_c)) %>% filter(trial %in% 21:40) %>% group_by(subjectID) %>% summarise(avg.EP_X.kb = mean(EP_X_c, na.rm = TRUE))
+temp2 = data.frame(matrix(ncol = 2, nrow = numSub*220))
+for(i in 1:numSub){
+  temp2$X1[(220*(i-1)+1):(220*i)] = rep(temp$subjectID[i],220)
+  temp2$X2[(220*(i-1)+1):(220*i)] = rep(temp$avg.EP_X.kb[i],220)
+}
+lhData$EP_X.bc = lhData$EP_X_c - temp2$X2
+
+# 70 trials have RT less than 100ms (which is inhuman). Need to replace these values with NA, as well as velPeakTime
+lhData = lhData %>%
+  mutate(velPeakTime_c = replace(velPeakTime_c, which(RT_c < 100), NA)) %>%
+  mutate(MT_c = replace(MT_c, which(RT_c < 100), NA)) %>%
+  mutate(mov_int_c = replace(mov_int_c, which(RT_c < 100), NA)) %>%
+  mutate(RT_c = replace(RT_c, which(RT_c < 100), NA)) # WARNING: RT_c has to be last in this chain.
+
+# Define trial numbers for the different phases
+vb = 1:20
+kb = 21:40
+ex = 43:182
+pe = 83:222
+```
+## Baseline stats
+```{r Baseline stats: kinesthetic baseline}
+lhData.kb = subset(lhData, lhData$trial == c(21:40))
+lhData.kb.mbs = aggregate(lhData.kb, by = list(lhData.kb$subjectID), FUN = mean, na.rm = TRUE)
+lhData.kb.stdbs = aggregate(lhData.kb, by = list(lhData.kb$subjectID), FUN = sd, na.rm = TRUE)
+
+ggplot(data = lhData.kb, aes(x = lhData.kb$subjectID, y = lhData.kb$ide_c))+
+  geom_boxplot()
+
+```
+
+
+## Data Wrangling
+```{r Caclulate means}
+
+# Bin trials in "blocks"
+nr = nrow(lhData)
+blockSize = 10
+block = rep(1:floor(nr/blockSize), each = blockSize) # Bins in blocks of "blockSize" trials (need to change lhData_mbg$block also!: See end of this chuck)
+lhData_blocks = aggregate(lhData, by = list(lhData$group, block), FUN = mean, na.rm = TRUE)
+
+
+# clean up data.frame
+lhData_blocks$group = lhData_blocks$Group.1 #rename group
+lhData_blocks = subset(lhData_blocks, select = -c(Group.1, Group.2, subjectID))
+# NOTE: 'trial' is meaningless but useful. We can consider these our 'block' data, and we can rename/replace values after taking the mean by group AND 'block'
+
+# mean is calculated by block and group for kinematic variables
+lhData_mbg = aggregate(lhData_blocks, list(lhData_blocks$group, lhData_blocks$trial),
+                           FUN = mean, na.rm = TRUE)
+lhData_mbg$group = lhData_mbg$Group.1
+lhData_mbg = lhData_mbg[order(lhData_mbg$group),]
+lhData_mbg$block = rep(1:(220/blockSize),numGroup)
+lhData_mbg = subset(lhData_mbg, select = -c(Group.1, Group.2, trial, target_theta))
+lhData_mbg = arrange.vars(lhData_mbg, c("block"=2))
+
+# SEM calculated by block and group for kinematic variables
+lhData_sembg = aggregate(lhData_blocks, list(lhData_blocks$group, lhData_blocks$trial),
+                         FUN = std.error, na.rm = TRUE)
+lhData_sembg$group = lhData_sembg$Group.1
+lhData_sembg = lhData_sembg[order(lhData_sembg$group),]
+lhData_sembg = subset(lhData_sembg, select = -c(Group.1, Group.2, trial, target_theta, group))
+
+# Create a phase variable (phase1 = vb, phase2 = kb, phase3 = ex, phase4 = pe)
+phase1 = rep(1,20/blockSize)
+phase2 = rep(2,20/blockSize)
+phase3 = rep(3,140/blockSize)
+phase4 = rep(4,40/blockSize)
+phase = rep(c(phase1,phase2,phase3,phase4),numGroup)
+lhData_mbg$phase = factor(phase)
+lhData_mbg = arrange.vars(lhData_mbg, c("phase"=3))
+lhData_MandSEMbg = cbind(lhData_mbg, lhData_sembg)
+colnames(lhData_MandSEMbg) = c('group', 'block', 'phase',
+                     'MT', 'MT_c', 'MT_st',
+                     'rmse', 'rmse_c', 'rmse_st',
+                     'ide', 'ide_c', 'ide_st',
+                     'norm_jerk', 'norm_jerk_c', 'norm_jerk_st',
+                     'mov_int', 'mov_int_c', 'mov_int_st',
+                     'EPE', 'EPE_c', 'EPE_st',
+                     'EP_X', 'EP_X_c', 'EP_X_st',
+                     'EP_Y', 'EP_Y_c', 'EP_Y_st',
+                     'end_X_pos', 'end_Y_pos',
+                     'tstamp_start', 'tstamp_end',
+                     'velPeak', 'velPeak_c', 'velPeak_st',
+                     'velPeakTime', 'velPeakTime_c', 'velPeakTime_st',
+                     'RT', 'RT_c', 'RT_st',
+                     'LFoff_FS', 'LFoff_FS_c', 'LFoff_FS_st',
+                     'LFoff_CMD', 'LFoff_CMD_c', 'LFoff_CMD_st',
+                     'LFvp_FS', 'LFvp_FS_c', 'LFvp_FS_st',
+                     'LFvp_CMD', 'LFvp_CMD_c', 'LFvp_CMD_st',
+                     'wrong_trial', 'LFoff.bc', 'LFvp.bc', 'ide.bc', 'EP_X.bc',
+                     'MT_sem', 'MT_c_sem', 'MT_st_sem',
+                     'rmse_sem', 'rmse_c_sem', 'rmse_st_sem',
+                     'ide_sem', 'ide_c_sem', 'ide_st_sem',
+                     'norm_jerk_sem', 'norm_jerk_c_sem', 'norm_jerk_st_sem',
+                     'mov_int_sem', 'mov_int_c_sem', 'mov_int_st_sem',
+                     'EPE_sem', 'EPE_c_sem', 'EPE_st_sem',
+                     'EP_X_sem', 'EP_X_c_sem', 'EP_X_st_sem',
+                     'EP_Y_sem', 'EP_Y_c_sem', 'EP_Y_st_sem',
+                     'end_X_pos_sem', 'end_Y_pos_sem',
+                     'tstamp_start_sem', 'tstamp_end_sem',
+                     'velPeak_sem', 'velPeak_c_sem', 'velPeak_st_sem',
+                     'velPeakTime_sem', 'velPeakTime_c_sem', 'velPeakTime_st_sem',
+                     'RT_sem', 'RT_c_sem', 'RT_st_sem',
+                     'LFoff_FS_sem', 'LFoff_FS_c_sem', 'LFoff_FS_st_sem',
+                     'LFoff_CMD_sem', 'LFoff_CMD_c_sem', 'LFoff_CMD_st_sem',
+                     'LFvp_FS_sem', 'LFvp_FS_c_sem', 'LFvp_FS_st_sem',
+                     'LFvp_CMD_sem', 'LFvp_CMD_c_sem', 'LFvp_CMD_st_sem',
+                     'wrong_trial_sem', 'LFoff.bc_sem', 'LFvp.bc_sem', 'ide.bc_sem', 'EP_X.bc_sem')
+```
+
+## Plot individual P Data
+```{r Plot individual data and color by uptrial vs. downtrial. Consider this for determining mirror/iso}
+Data = subset(lhData, lhData$subjectID == 311)
+exposure_phase = 43:182
+ggplot(data = Data[exposure_phase,], aes(x = trial, y = EP_X_st, color = target_theta))+
+  geom_point()+
+  geom_smooth()
+```
+
+## Plot Grouped Data
+```{r Plot ide.bc}
+pd = position_dodge(width = 0.4)
+block_ex = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase==3)$block
+group_ex = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase==3)$group
+ggplot(data = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase==3), aes(x = block, y = ide.bc))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase==3), aes(x = block, ymin = ide.bc-ide.bc_sem, ymax = ide.bc+ide.bc_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+
+```
+
+```{r Plot LFvp.bc}
+pd = position_dodge(width = 0.4)
+block_ex = subset(lhData_mbg, lhData_mbg$phase %in% 1:4)$block
+group_ex = subset(lhData_mbg, lhData_mbg$phase %in% 1:4)$group
+ggplot(data = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase %in% 1:4), aes(x = block, y = LFvp.bc))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase %in% 1:4),
+                aes(x = block, ymin = LFvp.bc-LFvp.bc_sem, ymax = LFvp.bc+LFvp.bc_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+```
+
+```{r Plot LFoff.bc}
+pd = position_dodge(width = 0.4)
+block_ex = subset(lhData_mbg, lhData_mbg$phase %in% 1:4)$block
+group_ex = subset(lhData_mbg, lhData_mbg$phase %in% 1:4)$group
+ggplot(data = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase %in% 1:4), aes(x = block, y = LFoff.bc))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase %in% 1:4),
+                aes(x = block, ymin = LFoff.bc-LFoff.bc_sem, ymax = LFoff.bc+LFoff.bc_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+```
+
+```{r Plot RT_c}
+pd = position_dodge(width = 0.4)
+block_ex = subset(lhData_mbg, lhData_mbg$phase %in% 1:4)$block
+group_ex = subset(lhData_mbg, lhData_mbg$phase %in% 1:4)$group
+ggplot(data = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase %in% 1:4), aes(x = block, y = RT_c))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase %in% 1:4),
+                aes(x = block, ymin = RT_c-RT_c_sem, ymax = RT_c+RT_c_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+```
+
+```{r Plot velPeakTime_c}
+pd = position_dodge(width = 0.4)
+block_ex = subset(lhData_mbg, lhData_mbg$phase %in% 1:4)$block
+group_ex = subset(lhData_mbg, lhData_mbg$phase %in% 1:4)$group
+ggplot(data = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase %in% 1:4), aes(x = block, y = velPeakTime_c))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase %in% 1:4),
+                aes(x = block, ymin = velPeakTime_c-velPeakTime_c_sem, ymax = velPeakTime_c+velPeakTime_c_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+```
+
+```{r Plot MT_c}
+pd = position_dodge(width = 0.4)
+block_ex = subset(lhData_mbg, lhData_mbg$phase %in% 1:4)$block
+group_ex = subset(lhData_mbg, lhData_mbg$phase %in% 1:4)$group
+ggplot(data = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase %in% 1:4), aes(x = block, y = MT_c))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase %in% 1:4),
+                aes(x = block, ymin = MT_c-MT_c_sem, ymax = MT_c+MT_c_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+```
+
+```{r Plot mov_int_c}
+pd = position_dodge(width = 0.4)
+block_ex = subset(lhData_mbg, lhData_mbg$phase %in% 1:4)$block
+group_ex = subset(lhData_mbg, lhData_mbg$phase %in% 1:4)$group
+ggplot(data = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase %in% 1:4), aes(x = block, y = mov_int_c))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(lhData_MandSEMbg, lhData_MandSEMbg$phase %in% 1:4),
+                aes(x = block, ymin = mov_int_c-mov_int_c_sem, ymax = mov_int_c+mov_int_c_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+```

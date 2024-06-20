@@ -1,0 +1,329 @@
+---
+title: "interferenceDosing_lh_FC_v04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+```
+## Install new packages
+```{r}
+#install.packages('plotrix')
+#install.packages("grid")
+#install.packages("reshape")
+#install.packages("ez")
+#install.packages("Cairo")
+```
+## Load packages
+```{r Load packages}
+library(plyr)
+library(ggplot2)
+library(plotrix)
+library(dplyr)
+library(grid)
+#library(gridExtra)
+#library(lattice)
+library(reshape)
+library(ez)
+```
+## Column rearranger
+```{r}
+##arrange df vars by position
+##'vars' must be a named vector, e.g. c("var.name"=1)
+arrange.vars <- function(data, vars){
+    ##stop if not a data.frame (but should work for matrices as well)
+    stopifnot(is.data.frame(data))
+
+    ##sort out inputs
+    data.nms <- names(data)
+    var.nr <- length(data.nms)
+    var.nms <- names(vars)
+    var.pos <- vars
+    ##sanity checks
+    stopifnot( !any(duplicated(var.nms)), 
+               !any(duplicated(var.pos)) )
+    stopifnot( is.character(var.nms), 
+               is.numeric(var.pos) )
+    stopifnot( all(var.nms %in% data.nms) )
+    stopifnot( all(var.pos > 0), 
+               all(var.pos <= var.nr) )
+
+    ##prepare output
+    out.vec <- character(var.nr)
+    out.vec[var.pos] <- var.nms
+    out.vec[-var.pos] <- data.nms[ !(data.nms %in% var.nms) ]
+    stopifnot( length(out.vec)==var.nr )
+
+    ##re-arrange vars by position
+    data <- data[ , out.vec]
+    return(data)
+}
+```
+## Data import
+```{r Load in FC data}
+setwd("/Volumes/mnl/Data/Adaptation/interference_dosing/Post_Step_3_FC") #Mac
+#setwd("Z:\\Data\\Adaptation\\interference_dosing\\Post_Step_3_FC") #PC
+
+# FORCE SENSOR DATA
+fcData.fs = read.delim('lh_raw_fc_fs.csv',header = FALSE, sep = ",", na.strings = 'NaN')
+
+numSub = nrow(fcData.fs)/48
+sample = seq(1,1000)
+trial = rep(1:48,numSub)
+colnames(fcData.fs) = c('subID', 'wrongTrial',sample)
+fcData.fs$trial = trial
+fcData.fs = arrange.vars(fcData.fs,vars = c("trial"=3))
+
+factors = c('subID', 'wrongTrial')
+fcData.fs[,factors] = lapply(fcData.fs[,factors], factor)
+
+# Add in a column for group number
+fcData.fs$group = rep(0,48*numSub)
+for (i in 1:(nrow(fcData.fs))){
+  fcData.fs$group[i] = substr(as.character(fcData.fs$subID[i]),1,1)
+}
+fcData.fs = arrange.vars(fcData.fs, vars = c("group" = 4))
+fcData.fs$group = as.factor(fcData.fs$group)
+
+
+# FORCE COMMAND DATA
+fcData.cmd = read.delim('lh_raw_fc_cmd.csv',header = FALSE, sep = ",", na.strings = 'NaN')
+
+numSub = nrow(fcData.cmd)/48
+sample = seq(1,1000)
+trial = rep(1:48,numSub)
+colnames(fcData.cmd) = c('subID','wrongTrial',sample)
+fcData.cmd$trial = trial
+fcData.cmd = arrange.vars(fcData.cmd,vars = c("trial"=3))
+
+factors = c('subID', 'wrongTrial')
+fcData.cmd[,factors] = lapply(fcData.cmd[,factors], factor)
+
+# Add in a column for group number
+fcData.cmd$group = rep(0,48*numSub)
+for (i in 1:(nrow(fcData.cmd))){
+  fcData.cmd$group[i] = substr(as.character(fcData.cmd$subID[i]),1,1)
+}
+fcData.cmd = arrange.vars(fcData.cmd, vars = c("group" = 4))
+fcData.cmd$group = as.factor(fcData.cmd$group)
+```
+
+## Data Wrangling for FORCE SENSOR
+```{r Group means and group sem}
+# Need to subtract off the mean of kin basline from all trials, by subject
+temp = fcData.fs %>% select(-c(wrongTrial)) %>% filter(trial %in% 7:12) %>% group_by(subID) %>% summarise_all(funs(mean(.,na.rm = TRUE)))
+temp2 = data.frame(matrix(ncol = 1000, nrow = 48*numSub))
+for (i in 1:numSub){
+  for (j in 1:48){
+    temp2[(48*(i-1)+j),] = fcData.fs[(48*(i-1)+j),5:1004] - temp[i,4:1003] # This works, but takes a while...be patient :)
+  }
+}
+fcData.fs = cbind(fcData.fs[,1:4],temp2)
+rm(temp, temp2)
+colnames(fcData.fs)[5:1004] = c(1:1000)
+
+#NOTE: 7/24/17 edit: There is no KB difference between groups...no need to do this. If we want to, make sure to change fcData.fs to fcData.fs.bc for the remainder of this code
+
+# Calculate the group means and sem as a total dataset
+vb = subset(fcData.fs, trial %in% 1:6)
+kb = subset(fcData.fs, trial %in% 7:12)
+bk1 = subset(fcData.fs, trial %in% 13:18)
+bk2 = subset(fcData.fs, trial %in% 24:29)
+bk3 = subset(fcData.fs, trial %in% 35:40)
+
+# Vis baseline
+vbmean = aggregate(vb, list(vb$group), FUN = mean, na.rm = TRUE)
+vbmean$group = vbmean$Group.1
+vbmean = subset(vbmean, select = -c(Group.1, subID, wrongTrial, trial))
+vbse = aggregate(vb, list(vb$group), FUN = std.error, na.rm = TRUE)
+vbse$group = vbse$Group.1
+vbse = subset(vbse, select = -c(Group.1, subID, wrongTrial, trial))
+
+temp1 = melt(vbmean, id = c("group"))
+temp2 = melt(vbse, id =c("group"))
+visbaseline.fs = cbind(temp1,temp2$value)
+colnames(visbaseline.fs) = c("group", "sample", "mean", "se")
+visbaseline.fs$sample = as.numeric(visbaseline.fs$sample)
+rm(temp1, temp2, vb, vbmean, vbse)
+
+# Kin baseline
+kbmean = aggregate(kb, list(kb$group), FUN = mean, na.rm = TRUE)
+kbmean$group = kbmean$Group.1
+kbmean = subset(kbmean, select = -c(Group.1, subID, wrongTrial, trial))
+kbse = aggregate(kb, list(kb$group), FUN = std.error, na.rm = TRUE)
+kbse$group = kbse$Group.1
+kbse = subset(kbse, select = -c(Group.1, subID, wrongTrial, trial))
+
+temp1 = melt(kbmean, id = c("group"))
+temp2 = melt(kbse, id =c("group"))
+kinbaseline.fs = cbind(temp1,temp2$value)
+colnames(kinbaseline.fs) = c("group", "sample", "mean", "se")
+kinbaseline.fs$sample = as.numeric(kinbaseline.fs$sample)
+rm(temp1, temp2, kb, kbmean, bkse)
+
+# Block 1 (frist 6 FC trials)
+bk1mean = aggregate(bk1, list(bk1$group), FUN = mean, na.rm = TRUE)
+bk1mean$group = bk1mean$Group.1
+bk1mean = subset(bk1mean, select = -c(Group.1, subID, wrongTrial, trial))
+bk1se = aggregate(bk1, list(bk1$group), FUN = std.error, na.rm = TRUE)
+bk1se$group = bk1se$Group.1
+bk1se = subset(bk1se, select = -c(Group.1, subID, wrongTrial, trial))
+
+temp1 = melt(bk1mean, id = c("group"))
+temp2 = melt(bk1se, id =c("group"))
+block1.fs = cbind(temp1,temp2$value)
+colnames(block1.fs) = c("group", "sample", "mean", "se")
+block1.fs$sample = as.numeric(block1.fs$sample)
+rm(temp1, temp2, bk1, bk1mean, bk1se)
+
+# Block 2
+bk2mean = aggregate(bk2, list(bk2$group), FUN = mean, na.rm = TRUE)
+bk2mean$group = bk2mean$Group.1
+bk2mean = subset(bk2mean, select = -c(Group.1, subID, wrongTrial, trial))
+bk2se = aggregate(bk2, list(bk2$group), FUN = std.error, na.rm = TRUE)
+bk2se$group = bk2se$Group.1
+bk2se = subset(bk2se, select = -c(Group.1, subID, wrongTrial, trial))
+
+temp1 = melt(bk2mean, id = c("group"))
+temp2 = melt(bk2se, id =c("group"))
+block2.fs = cbind(temp1,temp2$value)
+colnames(block2.fs) = c("group", "sample", "mean", "se")
+block2.fs$sample = as.numeric(block2.fs$sample)
+rm(temp1, temp2, bk2, bk2mean, bk2se)
+
+# Block 3
+bk3mean = aggregate(bk3, list(bk3$group), FUN = mean, na.rm = TRUE)
+bk3mean$group = bk3mean$Group.1
+bk3mean = subset(bk3mean, select = -c(Group.1, subID, wrongTrial, trial))
+bk3se = aggregate(bk3, list(bk3$group), FUN = std.error, na.rm = TRUE)
+bk3se$group = bk3se$Group.1
+bk3se = subset(bk3se, select = -c(Group.1, subID, wrongTrial, trial))
+
+temp1 = melt(bk3mean, id = c("group"))
+temp2 = melt(bk3se, id =c("group"))
+block3.fs = cbind(temp1,temp2$value)
+colnames(block3.fs) = c("group", "sample", "mean", "se")
+block3.fs$sample = as.numeric(block3.fs$sample)
+rm(temp1, temp2, bk3, bk3mean, bk3se)
+```
+
+## Data Wrangling for FORCE COMMAND
+```{r Group means and group sem}
+# Need to subtract off the mean of kin basline from all trials, by subject
+temp = fcData.cmd %>% select(-c(wrongTrial)) %>% filter(trial %in% 7:12) %>% group_by(subID) %>% summarise_all(funs(mean(.,na.rm = TRUE)))
+temp2 = data.frame(matrix(ncol = 1000, nrow = 48*numSub))
+for (i in 1:numSub){
+  for (j in 1:48){
+    temp2[(48*(i-1)+j),] = fcData.cmd[(48*(i-1)+j),5:1004] - temp[i,4:1003] # This works, but takes a while...be patient :)
+  }
+}
+fcData.cmd = cbind(fcData.cmd[,1:4],temp2)
+rm(temp, temp2)
+colnames(fcData.cmd)[5:1004] = c(1:1000)
+
+#NOTE: 7/24/17 edit: There is no KB difference between groups...no need to do this. If we want to, make sure to change fcData.cmd to fcData.cmd.bc for the remainder of this code
+
+# Calculate the group means and sem as a total dataset
+vb = subset(fcData.cmd, trial %in% 1:6)
+kb = subset(fcData.cmd, trial %in% 7:12)
+bk1 = subset(fcData.cmd, trial %in% 13:18)
+bk2 = subset(fcData.cmd, trial %in% 24:29)
+bk3 = subset(fcData.cmd, trial %in% 35:40)
+
+# Vis baseline
+vbmean = aggregate(vb, list(vb$group), FUN = mean, na.rm = TRUE)
+vbmean$group = vbmean$Group.1
+vbmean = subset(vbmean, select = -c(Group.1, subID, wrongTrial, trial))
+vbse = aggregate(vb, list(vb$group), FUN = std.error, na.rm = TRUE)
+vbse$group = vbse$Group.1
+vbse = subset(vbse, select = -c(Group.1, subID, wrongTrial, trial))
+
+temp1 = melt(vbmean, id = c("group"))
+temp2 = melt(vbse, id =c("group"))
+visbaseline.cmd = cbind(temp1,temp2$value)
+colnames(visbaseline.cmd) = c("group", "sample", "mean", "se")
+visbaseline.cmd$sample = as.numeric(visbaseline.cmd$sample)
+rm(temp1, temp2, vb, vbmean, vbse)
+
+# Kin baseline
+kbmean = aggregate(kb, list(kb$group), FUN = mean, na.rm = TRUE)
+kbmean$group = kbmean$Group.1
+kbmean = subset(kbmean, select = -c(Group.1, subID, wrongTrial, trial))
+kbse = aggregate(kb, list(kb$group), FUN = std.error, na.rm = TRUE)
+kbse$group = kbse$Group.1
+kbse = subset(kbse, select = -c(Group.1, subID, wrongTrial, trial))
+
+temp1 = melt(kbmean, id = c("group"))
+temp2 = melt(kbse, id =c("group"))
+kinbaseline.cmd = cbind(temp1,temp2$value)
+colnames(kinbaseline.cmd) = c("group", "sample", "mean", "se")
+kinbaseline.cmd$sample = as.numeric(kinbaseline.cmd$sample)
+rm(temp1, temp2, kb, kbmean, kbse)
+
+# Block 1 (frist 6 FC trials)
+bk1mean = aggregate(bk1, list(bk1$group), FUN = mean, na.rm = TRUE)
+bk1mean$group = bk1mean$Group.1
+bk1mean = subset(bk1mean, select = -c(Group.1, subID, wrongTrial, trial))
+bk1se = aggregate(bk1, list(bk1$group), FUN = std.error, na.rm = TRUE)
+bk1se$group = bk1se$Group.1
+bk1se = subset(bk1se, select = -c(Group.1, subID, wrongTrial, trial))
+
+temp1 = melt(bk1mean, id = c("group"))
+temp2 = melt(bk1se, id =c("group"))
+block1.cmd = cbind(temp1,temp2$value)
+colnames(block1.cmd) = c("group", "sample", "mean", "se")
+block1.cmd$sample = as.numeric(block1.cmd$sample)
+rm(temp1, temp2, bk1, bk1mean, bk1se)
+
+# Block 2
+bk2mean = aggregate(bk2, list(bk2$group), FUN = mean, na.rm = TRUE)
+bk2mean$group = bk2mean$Group.1
+bk2mean = subset(bk2mean, select = -c(Group.1, subID, wrongTrial, trial))
+bk2se = aggregate(bk2, list(bk2$group), FUN = std.error, na.rm = TRUE)
+bk2se$group = bk2se$Group.1
+bk2se = subset(bk2se, select = -c(Group.1, subID, wrongTrial, trial))
+
+temp1 = melt(bk2mean, id = c("group"))
+temp2 = melt(bk2se, id =c("group"))
+block2.cmd = cbind(temp1,temp2$value)
+colnames(block2.cmd) = c("group", "sample", "mean", "se")
+block2.cmd$sample = as.numeric(block2.cmd$sample)
+rm(temp1, temp2, bk2, bk2mean, bk2se)
+
+# Block 3
+bk3mean = aggregate(bk3, list(bk3$group), FUN = mean, na.rm = TRUE)
+bk3mean$group = bk3mean$Group.1
+bk3mean = subset(bk3mean, select = -c(Group.1, subID, wrongTrial, trial))
+bk3se = aggregate(bk3, list(bk3$group), FUN = std.error, na.rm = TRUE)
+bk3se$group = bk3se$Group.1
+bk3se = subset(bk3se, select = -c(Group.1, subID, wrongTrial, trial))
+
+temp1 = melt(bk3mean, id = c("group"))
+temp2 = melt(bk3se, id =c("group"))
+block3.cmd = cbind(temp1,temp2$value)
+colnames(block3.cmd) = c("group", "sample", "mean", "se")
+block3.cmd$sample = as.numeric(block3.cmd$sample)
+rm(temp1, temp2, bk3, bk3mean, bk3se)
+```
+
+## Plotting
+```{r Plot mean FC data with +/- sem}
+ggplot(data = block1.fs, aes(x = sample, y = mean, color = group))+
+  geom_point()+
+  geom_errorbar(aes(x = block1.fs$sample, ymin = block1.fs$mean-block1.fs$se, ymax = block1.fs$mean+block1.fs$se, color = block1.fs$group, alpha = 0.05))+
+  coord_cartesian(ylim = c(-0.5, 3.5))
+```
+
+```{r Plot mean FC data with +/- sem}
+ggplot(data = block2.fs, aes(x = sample, y = mean, color = group))+
+  geom_point()+
+  geom_errorbar(aes(x = block2.fs$sample, ymin = block2.fs$mean-block2.fs$se, ymax = block2.fs$mean+block2.fs$se, color = block2.fs$group, alpha = 0.05))+
+  coord_cartesian(ylim = c(-0.5, 3.5))
+```
+
+```{r Plot mean FC data with +/- sem}
+ggplot(data = block3.fs, aes(x = sample, y = mean, color = group))+
+  geom_point()+
+  geom_errorbar(aes(x = block3.fs$sample, ymin = block3.fs$mean-block3.fs$se, ymax = block3.fs$mean+block3.fs$se, color = block3.fs$group, alpha = 0.05))+
+  coord_cartesian(ylim = c(-0.5, 3.5))
+```

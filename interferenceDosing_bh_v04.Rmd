@@ -1,0 +1,358 @@
+---
+title: "InterferenceDosing"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+## Install new packages
+```{r}
+#install.packages('plotrix')
+#install.packages("grid")
+#install.packages("reshape")
+#install.packages("ez")
+#install.packages("Cairo")
+```
+## Load packages
+```{r Load packages}
+library(plyr)
+library(ggplot2)
+library(plotrix)
+library(dplyr)
+library(grid)
+library(gridExtra)
+library(lattice)
+library(reshape)
+library(ez)
+```
+## Column rearranger
+```{r}
+##arrange df vars by position
+##'vars' must be a named vector, e.g. c("var.name"=1)
+arrange.vars <- function(data, vars){
+    ##stop if not a data.frame (but should work for matrices as well)
+    stopifnot(is.data.frame(data))
+
+    ##sort out inputs
+    data.nms <- names(data)
+    var.nr <- length(data.nms)
+    var.nms <- names(vars)
+    var.pos <- vars
+    ##sanity checks
+    stopifnot( !any(duplicated(var.nms)), 
+               !any(duplicated(var.pos)) )
+    stopifnot( is.character(var.nms), 
+               is.numeric(var.pos) )
+    stopifnot( all(var.nms %in% data.nms) )
+    stopifnot( all(var.pos > 0), 
+               all(var.pos <= var.nr) )
+
+    ##prepare output
+    out.vec <- character(var.nr)
+    out.vec[var.pos] <- var.nms
+    out.vec[-var.pos] <- data.nms[ !(data.nms %in% var.nms) ]
+    stopifnot( length(out.vec)==var.nr )
+
+    ##re-arrange vars by position
+    data <- data[ , out.vec]
+    return(data)
+}
+```
+
+## Load in lh and rh data
+```{r, include=FALSE}
+# Load in lh data
+
+setwd("/Volumes/mnl/Data/Adaptation/interference_dosing/Post_Step_3") # Mac
+#setwd("Z:\\Data\\Adaptation\\interference_dosing\\Post_Step_3") # PC
+#setwd("C:\\Users\\Alex\\Desktop\\IFDosing") # Home
+lhData = read.delim('lh_raw',header = FALSE, sep = ",", na.strings = 'NaN')
+
+numGroup = 3 # Number of groups (works only for my current dataset)
+
+colnames(lhData) = c('group', 'subjectID', 'trial', 'target_theta',
+                     'MT', 'MT_c', 'MT_st',
+                     'rmse', 'rmse_c', 'rmse_st',
+                     'ide', 'ide_c', 'ide_st',
+                     'norm_jerk', 'norm_jerk_c', 'norm_jerk_st',
+                     'mov_int', 'mov_int_c', 'mov_int_st',
+                     'EPE', 'EPE_c', 'EPE_st',
+                     'EP_X', 'EP_X_c', 'EP_X_st',
+                     'EP_Y', 'EP_Y_c', 'EP_Y_st',
+                     'end_X_pos', 'end_Y_pos',
+                     'tstamp_start', 'tstamp_end',
+                     'velPeak', 'velPeak_c', 'velPeak_st',
+                     'velPeakTime', 'velPeakTime_c', 'velPeakTime_st',
+                     'RT', 'RT_c', 'RT_st',
+                     'LFoff_FS', 'LFoff_FS_c', 'LFoff_FS_st',
+                     'LFoff_CMD', 'LFoff_CMD_c', 'LFoff_CMD_st',
+                     'LFvp_FS', 'LFvp_FS_c', 'LFvp_FS_st',
+                     'LFvp_CMD', 'LFvp_CMD_c', 'LFvp_CMD_st',
+                     'wrong_trial')
+
+factors = c('group', 'subjectID')
+lhData[,factors] = lapply(lhData[,factors], factor)
+
+# This will get rid of oulier subjects BEFORE generating the dataset to follow.
+outliers = c(0)
+#outliers = c(103,106,108,205,303) # Type the id of the subjects you wish to remove
+
+for (i in 1:length(outliers)){
+lhData = subset(lhData, lhData$subjectID != outliers[i])
+}
+numSub = nrow(lhData)/222 # number of subjects in the data.frame (scrubbed of outliers)
+
+# Remove trials 41, 42 for each subject
+lhData = lhData[-(which(lhData$trial %in% c(41,42))),]
+
+# Reflect EP_X UP trials across the y-axis. This will cause all ISO participants to have + values, and all MIRROR particpants to have - values
+lhData$target_theta = as.character(lhData$target_theta)
+lhData$target_theta = revalue(lhData$target_theta, c("4.712389" = "down", "1.570796" = "up"))
+
+# Instead of reflecting EP_X UP trials, lets take the ABS of both EP_X and ide values (this will correct for mirror and iso participants, allowing us to use everyone)
+lhData[c("ide", "ide_c", "ide_st", "EP_X", "EP_X_c", "EP_X_st", "LFoff_FS", "LFoff_FS_c", "LFoff_FS_st", "LFoff_CMD", "LFoff_CMD_c", "LFoff_CMD_st", "LFvp_FS", "LFvp_FS_c", "LFvp_FS_st", "LFvp_CMD", "LFvp_CMD_c", "LFvp_CMD_st")] = lapply(lhData[c("ide", "ide_c", "ide_st", "EP_X", "EP_X_c", "EP_X_st", "LFoff_FS", "LFoff_FS_c", "LFoff_FS_st", "LFoff_CMD", "LFoff_CMD_c", "LFoff_CMD_st", "LFvp_FS", "LFvp_FS_c", "LFvp_FS_st", "LFvp_CMD", "LFvp_CMD_c", "LFvp_CMD_st")], function(x) abs(x))
+
+# There is a KB difference in LFoff_FS_c. I will make a new variable (LFoff.bc) that subtracts the mean of all KB trials from all values.
+temp = lhData %>% select(c(group, subjectID, trial, LFoff_FS_c)) %>% filter(trial %in% 21:40) %>% group_by(subjectID) %>% summarise(avg.LFoff.kb = mean(LFoff_FS_c, na.rm = TRUE))
+temp2 = data.frame(matrix(ncol = 2, nrow = numSub*220))
+for(i in 1:numSub){
+  temp2$X1[(220*(i-1)+1):(220*i)] = rep(temp$subjectID[i],220)
+  temp2$X2[(220*(i-1)+1):(220*i)] = rep(temp$avg.LFoff.kb[i],220)
+}
+lhData$LFoff.bc = lhData$LFoff_FS_c - temp2$X2
+
+# Do the same thing for LFvp_FS_c
+temp = lhData %>% select(c(group, subjectID, trial, LFvp_FS_c)) %>% filter(trial %in% 21:40) %>% group_by(subjectID) %>% summarise(avg.LFvp.kb = mean(LFvp_FS_c, na.rm = TRUE))
+temp2 = data.frame(matrix(ncol = 2, nrow = numSub*220))
+for(i in 1:numSub){
+  temp2$X1[(220*(i-1)+1):(220*i)] = rep(temp$subjectID[i],220)
+  temp2$X2[(220*(i-1)+1):(220*i)] = rep(temp$avg.LFvp.kb[i],220)
+}
+lhData$LFvp.bc = lhData$LFvp_FS_c - temp2$X2
+
+# Do the same thing for ide_c
+temp = lhData %>% select(c(group, subjectID, trial, ide_c)) %>% filter(trial %in% 21:40) %>% group_by(subjectID) %>% summarise(avg.ide.kb = mean(ide_c, na.rm = TRUE))
+temp2 = data.frame(matrix(ncol = 2, nrow = numSub*220))
+for(i in 1:numSub){
+  temp2$X1[(220*(i-1)+1):(220*i)] = rep(temp$subjectID[i],220)
+  temp2$X2[(220*(i-1)+1):(220*i)] = rep(temp$avg.ide.kb[i],220)
+}
+lhData$ide.bc = lhData$ide_c - temp2$X2
+
+# Do the same thing for EP_X_c
+temp = lhData %>% select(c(group, subjectID, trial, EP_X_c)) %>% filter(trial %in% 21:40) %>% group_by(subjectID) %>% summarise(avg.EP_X.kb = mean(EP_X_c, na.rm = TRUE))
+temp2 = data.frame(matrix(ncol = 2, nrow = numSub*220))
+for(i in 1:numSub){
+  temp2$X1[(220*(i-1)+1):(220*i)] = rep(temp$subjectID[i],220)
+  temp2$X2[(220*(i-1)+1):(220*i)] = rep(temp$avg.EP_X.kb[i],220)
+}
+lhData$EP_X.bc = lhData$EP_X_c - temp2$X2
+
+# Load in rh data
+rhData = read.delim('rh_raw',header = FALSE, sep = ",", na.strings = 'NaN')
+
+numGroup = 3 # Number of groups (works only for my current dataset)
+
+colnames(rhData) = c('group', 'subjectID', 'trial', 'target_theta',
+                     'MT', 'MT_c', 'MT_st',
+                     'rmse', 'rmse_c', 'rmse_st',
+                     'ide', 'ide_c', 'ide_st',
+                     'norm_jerk', 'norm_jerk_c', 'norm_jerk_st',
+                     'mov_int', 'mov_int_c', 'mov_int_st',
+                     'EPE', 'EPE_c', 'EPE_st',
+                     'EP_X', 'EP_X_c', 'EP_X_st',
+                     'EP_Y', 'EP_Y_c', 'EP_Y_st',
+                     'end_X_pos', 'end_Y_pos',
+                     'tstamp_start', 'tstamp_end',
+                     'velPeak', 'velPeak_c', 'velPeak_st',
+                     'velPeakTime', 'velPeakTime_c', 'velPeakTime_st',
+                     'RT', 'RT_c', 'RT_st',
+                     'wrong_trial')
+
+factors = c('group', 'subjectID')
+rhData[,factors] = lapply(rhData[,factors], factor)
+
+# This will get rid of oulier subjects BEFORE generating the dataset to follow.
+outliers = c(0)
+#outliers = c(103,106,108,205,303) # Type the id of the subjects you wish to remove
+for (i in 1:length(outliers)){
+rhData = subset(rhData, rhData$subjectID != outliers[i])
+}
+
+numSub = nrow(rhData)/222 # number of subjects in the data.frame (scrubbed of outliers)
+
+# Remove trials 41, 42 for each subject
+rhData = rhData[-(which(rhData$trial %in% c(41,42))),]
+
+rhData$target_theta = as.character(rhData$target_theta)
+rhData$target_theta = revalue(rhData$target_theta, c("4.712389" = "down", "1.570796" = "up"))
+for(i in 1:(numSub*220)){
+  if(rhData$target_theta[i] == "up"){
+    rhData$EP_X[i] = rhData$EP_X[i]*(-1)
+    rhData$EP_X_c[i] = rhData$EP_X_c[i]*(-1)
+    rhData$EP_X_st[i] = rhData$EP_X_st[i]*(-1)
+  }
+}
+
+# Baseline correction for ide_c
+temp = rhData %>% select(c(group, subjectID, trial, ide_c)) %>% filter(trial %in% 1:20) %>% group_by(subjectID) %>% summarise(avg.ide.kb = mean(ide_c, na.rm = TRUE))
+temp2 = data.frame(matrix(ncol = 2, nrow = numSub*220))
+for(i in 1:numSub){
+  temp2$X1[(220*(i-1)+1):(220*i)] = rep(temp$subjectID[i],220)
+  temp2$X2[(220*(i-1)+1):(220*i)] = rep(temp$avg.ide.kb[i],220)
+}
+rhData$ide.bc = rhData$ide_c - temp2$X2
+rm(temp, temp2)
+
+# Define trial numbers for the different phases
+vb = 1:20
+kb = 21:40
+ex = 43:182
+pe = 183:222
+
+# Break up exposure and post exposure into early and late portions (20 trials at beginning and end)
+ex_early = 43:62
+ex_late = 163:182
+pe_early = 183:202
+pe_late = 203:222
+```
+
+```{r Compute Hand Differences}
+# A positive values means the left hand leads the right at movement onset.
+
+hand.diff = subset(lhData, select = c("group", "subjectID", "trial"))
+hand.diff$lag = (rhData$tstamp_start - lhData$tstamp_start)*1000
+hand.diff$lagf = (rhData$tstamp_end - lhData$tstamp_end)*1000
+hand.diff$velPeak = rhData$velPeak_c - lhData$velPeak_c
+hand.diff$dist = rhData$mov_int_c - lhData$mov_int_c
+hand.diff$rmse = rhData$rmse_c - lhData$rmse_c
+hand.diff$avVel = (rhData$mov_int_c/(rhData$tstamp_end-rhData$tstamp_start) - lhData$mov_int_c/(lhData$tstamp_end-lhData$tstamp_start))
+hand.diff$velPeakTime = rhData$velPeakTime_c - lhData$velPeakTime_c
+```
+
+```{r Block trials and make plotting data.frame}
+# Bin trials in "blocks"
+nr = nrow(hand.diff)
+blockSize = 10
+block = rep(rep(seq(1:22), each = 10),numSub) # Bins in blocks of "blockSize" trials (need to change hand.diff_mbg$block also!: See end of this chuck)
+hand.diff$block = as.factor(block)
+#hand.diff_blocks = aggregate(hand.diff, by = list(hand.diff$group, block), FUN = median, na.rm = TRUE)
+hand.diff_blocks = hand.diff %>% select(-c(trial)) %>% group_by(group, subjectID, block) %>% summarise_each(funs(median(.,na.rm = TRUE))) %>% ungroup() %>% select(-c(subjectID))
+#OK...this gives the same result (when using mean), so the grouping changes work just fine. However, using dplyr pipes allows the use of median, which 'aggregate' cannot do.
+
+# mean and SEM is calculated by block and group for kinematic variables
+hand.diff_MandSEMbg = hand.diff_blocks %>% group_by(group, block) %>% summarise_each(funs(mean, std.error))
+
+# Create a phase variable (phase1 = vb, phase2 = kb, phase3 = ex, phase4 = pe)
+phase1 = rep(1,20/blockSize)
+phase2 = rep(2,20/blockSize)
+phase3 = rep(3,140/blockSize)
+phase4 = rep(4,40/blockSize)
+phase = rep(c(phase1,phase2,phase3,phase4),numGroup)
+hand.diff_MandSEMbg$phase = factor(phase)
+hand.diff_MandSEMbg = arrange.vars(hand.diff_MandSEMbg, c("phase"=3))
+hand.diff_MandSEMbg$block = as.numeric(hand.diff_MandSEMbg$block)
+
+# Use this for plotting by group
+colnames(hand.diff_MandSEMbg) = c('group', 'block', 'phase',
+                     'lag', 'lagf', 'velPeak', 'dist', 'rmse', 'avVel', 'velPeakTime',
+                     'sem_lag', 'sem_lagf', 'sem_velPeak', 'sem_dist', 'sem_rmse', 'sem_avVel', 'sem_velPeakTime')
+
+
+# Use this for plotting groups collapsed together
+
+# mean and SEM is calculated by block for kinematic variables
+hand.diff.plot = hand.diff_blocks %>% group_by(block) %>% summarise_each(funs(mean, std.error), -c(group)) #%>% select(-c(group,subjectID))
+hand.diff.plot$block = as.numeric(hand.diff.plot$block)
+colnames(hand.diff.plot) = c('block',
+                     'lag', 'lagf', 'velPeak', 'dist', 'rmse', 'avVel', 'velPeakTime',
+                     'sem_lag', 'sem_lagf', 'sem_velPeak', 'sem_dist', 'sem_rmse', 'sem_avVel', 'sem_velPeakTime')
+
+```
+
+## Plot Grouped Data
+```{r Plot lag}
+pd = position_dodge(width = 0.4)
+block_ex = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4)$block
+group_ex = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4)$group
+ggplot(data = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4), aes(x = block, y = lag))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4), aes(x = block, ymin = lag-lag_sem, ymax = lag+lag_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+
+```
+
+```{r Plot velPeakTime}
+pd = position_dodge(width = 0.4)
+block_ex = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4)$block
+group_ex = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4)$group
+ggplot(data = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4), aes(x = block, y = velPeakTime))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4), aes(x = block, ymin = velPeakTime-velPeakTime_sem, ymax = velPeakTime+velPeakTime_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+
+```
+
+```{r Plot lagf}
+pd = position_dodge(width = 0.4)
+block_ex = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4)$block
+group_ex = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4)$group
+ggplot(data = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4), aes(x = block, y = lagf))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4), aes(x = block, ymin = lagf-lagf_sem, ymax = lagf+lagf_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+
+```
+
+```{r Plot velPeak}
+pd = position_dodge(width = 0.4)
+block_ex = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4)$block
+group_ex = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4)$group
+ggplot(data = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4), aes(x = block, y = velPeak))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4), aes(x = block, ymin = velPeak-velPeak_sem, ymax = velPeak+velPeak_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+
+```
+
+```{r Plot dist}
+pd = position_dodge(width = 0.4)
+block_ex = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4)$block
+group_ex = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4)$group
+ggplot(data = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4), aes(x = block, y = dist))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4), aes(x = block, ymin = dist-dist_sem, ymax = dist+dist_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+
+```
+
+```{r Plot rmse}
+pd = position_dodge(width = 0.4)
+block_ex = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4)$block
+group_ex = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4)$group
+ggplot(data = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4), aes(x = block, y = rmse))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4), aes(x = block, ymin = rmse-rmse_sem, ymax = rmse+rmse_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+
+```
+
+```{r Plot avVel}
+pd = position_dodge(width = 0.4)
+block_ex = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4)$block
+group_ex = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4)$group
+ggplot(data = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4), aes(x = block, y = avVel))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(hand.diff_MandSEMbg, hand.diff_MandSEMbg$phase %in% 1:4), aes(x = block, ymin = avVel-avVel_sem, ymax = avVel+avVel_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+
+```

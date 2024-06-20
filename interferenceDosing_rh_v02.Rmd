@@ -1,0 +1,272 @@
+---
+title: "InterferenceDosing"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+
+```
+## Install new packages
+```{r}
+#install.packages('plotrix')
+#install.packages("Cairo")
+```
+## Load packages
+```{r Load packages}
+#library(plyr)
+#library(ggplot2)
+#library(plotrix)
+#library(dplyr)
+#library(grid)
+#library(gridExtra)
+#library(lattice)
+#library(reshape)
+#library(ez)
+
+```
+## Column rearranger
+```{r}
+##arrange df vars by position
+##'vars' must be a named vector, e.g. c("var.name"=1)
+arrange.vars <- function(data, vars){
+    ##stop if not a data.frame (but should work for matrices as well)
+    stopifnot(is.data.frame(data))
+
+    ##sort out inputs
+    data.nms <- names(data)
+    var.nr <- length(data.nms)
+    var.nms <- names(vars)
+    var.pos <- vars
+    ##sanity checks
+    stopifnot( !any(duplicated(var.nms)), 
+               !any(duplicated(var.pos)) )
+    stopifnot( is.character(var.nms), 
+               is.numeric(var.pos) )
+    stopifnot( all(var.nms %in% data.nms) )
+    stopifnot( all(var.pos > 0), 
+               all(var.pos <= var.nr) )
+
+    ##prepare output
+    out.vec <- character(var.nr)
+    out.vec[var.pos] <- var.nms
+    out.vec[-var.pos] <- data.nms[ !(data.nms %in% var.nms) ]
+    stopifnot( length(out.vec)==var.nr )
+
+    ##re-arrange vars by position
+    data <- data[ , out.vec]
+    return(data)
+}
+```
+## Load in Data
+```{r Load in Data, include=FALSE}
+setwd("/Volumes/mnl/Data/Adaptation/interference_dosing/Post_Step_3") #Mac
+#setwd("Z:\\Data\\Adaptation\\interference_dosing\\Post_Step_3") # PC
+rhData = read.delim('rh_raw',header = FALSE, sep = ",", na.strings = 'NaN')
+
+numGroup = 3 # Number of groups (works only for my current dataset)
+
+colnames(rhData) = c('group', 'subjectID', 'trial', 'target_theta',
+                     'MT', 'MT_c', 'MT_st',
+                     'rmse', 'rmse_c', 'rmse_st',
+                     'ide', 'ide_c', 'ide_st',
+                     'norm_jerk', 'norm_jerk_c', 'norm_jerk_st',
+                     'mov_int', 'mov_int_c', 'mov_int_st',
+                     'EPE', 'EPE_c', 'EPE_st',
+                     'EP_X', 'EP_X_c', 'EP_X_st',
+                     'EP_Y', 'EP_Y_c', 'EP_Y_st',
+                     'end_X_pos', 'end_Y_pos',
+                     'tstamp_start', 'tstamp_end',
+                     'velPeak', 'velPeak_c', 'velPeak_st',
+                     'velPeakTime', 'velPeakTime_c', 'velPeakTime_st',
+                     'RT', 'RT_c', 'RT_st',
+                     'wrong_trial')
+
+factors = c('group', 'subjectID')
+rhData[,factors] = lapply(rhData[,factors], factor)
+
+# This will get rid of oulier subjects BEFORE generating the dataset to follow.
+outliers = c(0)
+#outliers = c(103,106,108,205,303) # Type the id of the subjects you wish to remove
+for (i in 1:length(outliers)){
+rhData = subset(rhData, rhData$subjectID != outliers[i])
+}
+
+numSub = nrow(rhData)/222 # number of subjects in the data.frame (scrubbed of outliers)
+
+# Remove trials 41, 42 for each subject
+rhData = rhData[-(which(rhData$trial %in% c(41,42))),]
+
+rhData$target_theta = as.character(rhData$target_theta)
+rhData$target_theta = revalue(rhData$target_theta, c("4.712389" = "down", "1.570796" = "up"))
+for(i in 1:(numSub*220)){
+  if(rhData$target_theta[i] == "up"){
+    rhData$EP_X[i] = rhData$EP_X[i]*(-1)
+    rhData$EP_X_c[i] = rhData$EP_X_c[i]*(-1)
+    rhData$EP_X_st[i] = rhData$EP_X_st[i]*(-1)
+  }
+}
+
+# Baseline correction for ide_c
+temp = rhData %>% select(c(group, subjectID, trial, ide_c)) %>% filter(trial %in% 1:20) %>% group_by(subjectID) %>% summarise(avg.ide.kb = mean(ide_c, na.rm = TRUE))
+temp2 = data.frame(matrix(ncol = 2, nrow = numSub*220))
+for(i in 1:numSub){
+  temp2$X1[(220*(i-1)+1):(220*i)] = rep(temp$subjectID[i],220)
+  temp2$X2[(220*(i-1)+1):(220*i)] = rep(temp$avg.ide.kb[i],220)
+}
+rhData$ide.bc = rhData$ide_c - temp2$X2
+
+# Some trials have RT less than 100ms (which is inhuman). Need to replace these values with NA, as well as velPeakTime
+rhData = rhData %>%
+  mutate(velPeakTime_c = replace(velPeakTime_c, which(RT_c < 100), NA)) %>%
+  mutate(MT_c = replace(MT_c, which(RT_c < 100), NA)) %>%
+  mutate(mov_int_c = replace(mov_int_c, which(RT_c < 100), NA)) %>%
+  mutate(RT_c = replace(RT_c, which(RT_c < 100), NA)) # WARNING: RT_c has to be last in this chain.
+
+```
+## Data Wrangling
+```{r Take mean by group and trial}
+# Bin in trials of X so we are left with 220/X "blocks"
+nr = nrow(rhData)
+blockSize = 10
+block = rep(1:floor(nr/blockSize), each = blockSize) # Bins in blocks of blockSize trials (need to change rhData_mbg$block also!: See end of this chuck)
+rhData_blocks = aggregate(rhData, by = list(rhData$group, block), FUN = mean, na.rm = TRUE)
+
+# clean up data.frame
+rhData_blocks$group = rhData_blocks$Group.1 #rename group
+rhData_blocks = subset(rhData_blocks, select = -c(Group.1, Group.2, subjectID))
+# NOTE: 'trial' is meaningless but useful. We can consider these our 'block' data, and we can rename/replace values after taking the mean by group AND 'block'
+
+# mean is calculated by group and by 'block'
+rhData_mbg = aggregate(rhData_blocks, list(rhData_blocks$group, rhData_blocks$trial),
+                           FUN = mean, na.rm = TRUE)
+rhData_mbg$group = rhData_mbg$Group.1
+rhData_mbg = rhData_mbg[order(rhData_mbg$group),]
+rhData_mbg$block = rep(1:(220/blockSize),numGroup)
+rhData_mbg = subset(rhData_mbg, select = -c(Group.1, Group.2, target_theta, trial))
+rhData_mbg = arrange.vars(rhData_mbg, c("block"=2))
+
+# SEM calculated by block and group for kinematic variables
+rhData_sembg = aggregate(rhData_blocks, list(rhData_blocks$group, rhData_blocks$trial),
+                         FUN = std.error, na.rm = TRUE)
+rhData_sembg$group = rhData_sembg$Group.1
+rhData_sembg = rhData_sembg[order(rhData_sembg$group),]
+rhData_sembg = subset(rhData_sembg, select = -c(Group.1, Group.2, trial, target_theta, group))
+
+# Create a phase variable (phase1 = vb, phase2 = kb, phase3 = ex, phase4 = pe)
+phase1 = rep(1,20/blockSize)
+phase2 = rep(2,20/blockSize)
+phase3 = rep(3,140/blockSize)
+phase4 = rep(4,40/blockSize)
+phase = rep(c(phase1,phase2,phase3,phase4),numGroup)
+rhData_mbg$phase = factor(phase)
+rhData_mbg = arrange.vars(rhData_mbg, c("phase"=3))
+rhData_MandSEMbg = cbind(rhData_mbg, rhData_sembg)
+colnames(rhData_MandSEMbg) = c('group', 'block', 'phase',
+                     'MT', 'MT_c', 'MT_st',
+                     'rmse', 'rmse_c', 'rmse_st',
+                     'ide', 'ide_c', 'ide_st',
+                     'norm_jerk', 'norm_jerk_c', 'norm_jerk_st',
+                     'mov_int', 'mov_int_c', 'mov_int_st',
+                     'EPE', 'EPE_c', 'EPE_st',
+                     'EP_X', 'EP_X_c', 'EP_X_st',
+                     'EP_Y', 'EP_Y_c', 'EP_Y_st',
+                     'end_X_pos', 'end_Y_pos',
+                     'tstamp_start', 'tstamp_end',
+                     'velPeak', 'velPeak_c', 'velPeak_st',
+                     'velPeakTime', 'velPeakTime_c', 'velPeakTime_st',
+                     'RT', 'RT_c', 'RT_st',
+                     'wrong_trial', 'ide.bc',
+                     'MT_sem', 'MT_c_sem', 'MT_st_sem',
+                     'rmse_sem', 'rmse_c_sem', 'rmse_st_sem',
+                     'ide_sem', 'ide_c_sem', 'ide_st_sem',
+                     'norm_jerk_sem', 'norm_jerk_c_sem', 'norm_jerk_st_sem',
+                     'mov_int_sem', 'mov_int_c_sem', 'mov_int_st_sem',
+                     'EPE_sem', 'EPE_c_sem', 'EPE_st_sem',
+                     'EP_X_sem', 'EP_X_c_sem', 'EP_X_st_sem',
+                     'EP_Y_sem', 'EP_Y_c_sem', 'EP_Y_st_sem',
+                     'end_X_pos_sem', 'end_Y_pos_sem',
+                     'tstamp_start_sem', 'tstamp_end_sem',
+                     'velPeak_sem', 'velPeak_c_sem', 'velPeak_st_sem',
+                     'velPeakTime_sem', 'velPeakTime_c_sem', 'velPeakTime_st_sem',
+                     'RT_sem', 'RT_c_sem', 'RT_st_sem',
+                     'wrong_trial_sem', 'ide.bc_sem')
+```
+
+## Plot Raw Data
+```{r Plot raw data}
+Data = subset(rhData, rhData$subjectID == 101)
+
+ggplot(data = Data, aes(x = trial, y = ide_st))+
+  geom_point()
+```
+
+## Plot Grouped Data
+```{r Plot}
+ggplot(data = rhData_mbg, aes(x = block, y = ide.bc))+
+  geom_point(aes(color = rhData_mbg$group))
+  #geom_smooth(aes(color= rhData_mbg$group))
+```
+
+```{r Plot only exposure phase}
+block_ex = subset(rhData_mbg, rhData_mbg$phase==3)$block
+group_ex = subset(rhData_mbg, rhData_mbg$phase==3)$group
+
+ggplot(data = subset(rhData_mbg, rhData_mbg$phase==3), aes(x = block, y = ide_st))+
+  geom_point(aes(color = group_ex))+
+  geom_smooth(aes(color = group_ex, fill = group_ex))
+```
+
+```{r Plot EP_X}
+ggplot(data = rhData_mbg, aes(x = block, y = EP_X))+
+  geom_point(aes(color = rhData_mbg$group))
+  #geom_smooth(aes(color = rhData_mbg$group))
+```
+
+```{r Plot ide_st}
+pd = position_dodge(width = 0.4)
+block_ex = subset(rhData_mbg, rhData_mbg$phase %in% 1:4)$block
+group_ex = subset(rhData_mbg, rhData_mbg$phase %in% 1:4)$group
+ggplot(data = subset(rhData_MandSEMbg, rhData_MandSEMbg$phase %in% 1:4), aes(x = block, y = ide_st))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(rhData_MandSEMbg, rhData_MandSEMbg$phase %in% 1:4),
+                aes(x = block, ymin = ide_st-ide_st_sem, ymax = ide_st+ide_st_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+```
+
+```{r Plot RT_c}
+pd = position_dodge(width = 0.4)
+block_ex = subset(rhData_mbg, rhData_mbg$phase %in% 1:4)$block
+group_ex = subset(rhData_mbg, rhData_mbg$phase %in% 1:4)$group
+ggplot(data = subset(rhData_MandSEMbg, rhData_MandSEMbg$phase %in% 1:4), aes(x = block, y = RT_c))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(rhData_MandSEMbg, rhData_MandSEMbg$phase %in% 1:4),
+                aes(x = block, ymin = RT_c-RT_c_sem, ymax = RT_c+RT_c_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+```
+
+```{r Plot velPeakTime_c}
+pd = position_dodge(width = 0.4)
+block_ex = subset(rhData_mbg, rhData_mbg$phase %in% 1:4)$block
+group_ex = subset(rhData_mbg, rhData_mbg$phase %in% 1:4)$group
+ggplot(data = subset(rhData_MandSEMbg, rhData_MandSEMbg$phase %in% 1:4), aes(x = block, y = velPeakTime_c))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(rhData_MandSEMbg, rhData_MandSEMbg$phase %in% 1:4),
+                aes(x = block, ymin = velPeakTime_c-velPeakTime_c_sem, ymax = velPeakTime_c+velPeakTime_c_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+```
+
+```{r Plot MT_c}
+pd = position_dodge(width = 0.4)
+block_ex = subset(rhData_mbg, rhData_mbg$phase %in% 1:4)$block
+group_ex = subset(rhData_mbg, rhData_mbg$phase %in% 1:4)$group
+ggplot(data = subset(rhData_MandSEMbg, rhData_MandSEMbg$phase %in% 1:4), aes(x = block, y = MT_c))+
+  geom_point(aes(color = group_ex), position = pd)+
+  geom_errorbar(data = subset(rhData_MandSEMbg, rhData_MandSEMbg$phase %in% 1:4),
+                aes(x = block, ymin = MT_c-MT_c_sem, ymax = MT_c+MT_c_sem, color = group),
+                position = pd, width = 0)+
+  geom_line(aes(color = group_ex), position = pd)
+```

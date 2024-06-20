@@ -1,0 +1,401 @@
+---
+title: "interferenceDosing_kinematics_resample_bh"
+output: html_document
+about: Reads in both hand kinematics, resampled to 1000 points for each trial
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+## Install new packages
+```{r}
+#install.packages('plotrix')
+#install.packages("grid")
+#install.packages("reshape")
+#install.packages("ez")
+```
+## Load packages
+```{r Load packages}
+library(plyr)
+library(ggplot2)
+library(plotrix)
+library(dplyr)
+library(grid)
+library(gridExtra)
+library(lattice)
+#library(reshape)
+library(ez)
+library(tidyr)
+```
+## Column rearranger
+```{r}
+##arrange df vars by position
+##'vars' must be a named vector, e.g. c("var.name"=1)
+arrange.vars <- function(data, vars){
+    ##stop if not a data.frame (but should work for matrices as well)
+    stopifnot(is.data.frame(data))
+
+    ##sort out inputs
+    data.nms <- names(data)
+    var.nr <- length(data.nms)
+    var.nms <- names(vars)
+    var.pos <- vars
+    ##sanity checks
+    stopifnot( !any(duplicated(var.nms)), 
+               !any(duplicated(var.pos)) )
+    stopifnot( is.character(var.nms), 
+               is.numeric(var.pos) )
+    stopifnot( all(var.nms %in% data.nms) )
+    stopifnot( all(var.pos > 0), 
+               all(var.pos <= var.nr) )
+
+    ##prepare output
+    out.vec <- character(var.nr)
+    out.vec[var.pos] <- var.nms
+    out.vec[-var.pos] <- data.nms[ !(data.nms %in% var.nms) ]
+    stopifnot( length(out.vec)==var.nr )
+
+    ##re-arrange vars by position
+    data <- data[ , out.vec]
+    return(data)
+}
+```
+
+## Load in Data
+```{r Load data}
+setwd("/Volumes/mnl/Data/Adaptation/interference_dosing/Post_Step_3_BH") #Mac
+raw.data = read.delim('raw_BH.csv',header = FALSE, sep = ",", na.strings = 'NaN') # This takes a long time...be patient!
+
+# IMPORTANT: Data are stacked in rows such that each subject has 1110 observations in the data.frame. For this experiment, we have 222 trials (including force channel trials and the two visual baselines before exposure). Each subject will have 5 measures: LHD, LHV, RHD, RHV, Distance_diff. These 'variables' are stacked such that the total number of observations is num.sub*num.measures*222. For this experiment, that is 45*5*222 = 49950.
+num.measures = 5 # This defines how many measure we have.
+num.trials = 222 # This defines how many trials per subject we have.
+num.samples = 1000 # This defines how many samples per trial we have (always 1000 because we resampled)
+
+# Convert V1 (subID) and V2 (group) to factors
+raw.data$V1 = as.factor(raw.data$V1)
+raw.data$V2 = as.factor(raw.data$V2)
+
+# Rename variables
+sample = seq(1,num.samples)
+colnames(raw.data) = c("subID", "group",sample)
+
+# Find number of subjects and number of groups
+num.sub = nlevels(raw.data$subID)
+num.group = nlevels(raw.data$group)
+
+# Add a variable denoting trial number
+raw.data$trial = rep(1:num.trials, num.sub*num.measures)
+raw.data = arrange.vars(raw.data, vars = c("trial" = 3))
+
+# Add a variable denoting which measure we are referring to
+raw.data$measure = rep(c(rep("lhd",num.trials), rep("lhv",num.trials), rep("rhd",num.trials), rep("rhv",num.trials), rep("d_diff",num.trials)),num.sub)
+raw.data = arrange.vars(raw.data, vars = c("measure" = 4))
+raw.data$measure = as.factor(raw.data$measure)
+```
+
+```{r Separate the data.frame into LHD, LHV, ..., etc.}
+LHD = subset(raw.data, raw.data$measure == "lhd")
+LHV = subset(raw.data, raw.data$measure == "lhv")
+RHD = subset(raw.data, raw.data$measure == "rhd")
+RHV = subset(raw.data, raw.data$measure == "rhv")
+Ddiff = subset(raw.data, raw.data$measure == "d_diff")
+```
+
+```{r Create mean by blocks}
+# This will average all trials within a block per participant. The blocks will be: VB, KB, early exposure (first 20 trials), late exposure (last 20), early post-exposure (first 20), late post-exposure (last 20)
+vb = 1:20
+kb = 21:40
+ee = 43:62
+le = 163:182
+ep = 183:202
+lp = 203:222
+
+# Left hand distance (visual baseline)
+temp.mean = filter(LHD, trial %in% vb) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(LHD, trial %in% vb) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+LHD.vb = bind_cols(temp.mean, temp.sem)
+LHD.vb$sample = as.numeric(LHD.vb$sample)
+rm(temp.mean, temp.sem)
+
+# Left hand distance (kin baseline)
+temp.mean = filter(LHD, trial %in% kb) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(LHD, trial %in% kb) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+LHD.kb = bind_cols(temp.mean, temp.sem)
+LHD.kb$sample = as.numeric(LHD.kb$sample)
+rm(temp.mean, temp.sem)
+
+# Left hand distance (early exposure)
+temp.mean = filter(LHD, trial %in% ee) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(LHD, trial %in% ee) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+LHD.ee = bind_cols(temp.mean, temp.sem)
+LHD.ee$sample = as.numeric(LHD.ee$sample)
+rm(temp.mean, temp.sem)
+
+# Left hand distance (late exposure)
+temp.mean = filter(LHD, trial %in% le) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(LHD, trial %in% le) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+LHD.le = bind_cols(temp.mean, temp.sem)
+LHD.le$sample = as.numeric(LHD.le$sample)
+rm(temp.mean, temp.sem)
+
+# Left hand distance (early post-exposure)
+temp.mean = filter(LHD, trial %in% ep) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(LHD, trial %in% ep) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+LHD.ep = bind_cols(temp.mean, temp.sem)
+LHD.ep$sample = as.numeric(LHD.ep$sample)
+rm(temp.mean, temp.sem)
+
+# Left hand distance (late post-exposure)
+temp.mean = filter(LHD, trial %in% lp) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(LHD, trial %in% lp) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+LHD.lp = bind_cols(temp.mean, temp.sem)
+LHD.lp$sample = as.numeric(LHD.lp$sample)
+rm(temp.mean, temp.sem)
+
+# Right hand distance (visual baseline)
+temp.mean = filter(RHD, trial %in% vb) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(RHD, trial %in% vb) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+RHD.vb = bind_cols(temp.mean, temp.sem)
+RHD.vb$sample = as.numeric(RHD.vb$sample)
+rm(temp.mean, temp.sem)
+
+# Right hand distance (kin baseline)
+temp.mean = filter(RHD, trial %in% kb) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(RHD, trial %in% kb) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+RHD.kb = bind_cols(temp.mean, temp.sem)
+RHD.kb$sample = as.numeric(RHD.kb$sample)
+rm(temp.mean, temp.sem)
+
+# Right hand distance (early exposure)
+temp.mean = filter(RHD, trial %in% ee) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(RHD, trial %in% ee) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+RHD.ee = bind_cols(temp.mean, temp.sem)
+RHD.ee$sample = as.numeric(RHD.ee$sample)
+rm(temp.mean, temp.sem)
+
+# Right hand distance (late exposure)
+temp.mean = filter(RHD, trial %in% le) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(RHD, trial %in% le) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+RHD.le = bind_cols(temp.mean, temp.sem)
+RHD.le$sample = as.numeric(RHD.le$sample)
+rm(temp.mean, temp.sem)
+
+# Right hand distance (early post-exposure)
+temp.mean = filter(RHD, trial %in% ep) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(RHD, trial %in% ep) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+RHD.ep = bind_cols(temp.mean, temp.sem)
+RHD.ep$sample = as.numeric(RHD.ep$sample)
+rm(temp.mean, temp.sem)
+
+# Right hand distance (late post-exposure)
+temp.mean = filter(RHD, trial %in% lp) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(RHD, trial %in% lp) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+RHD.lp = bind_cols(temp.mean, temp.sem)
+RHD.lp$sample = as.numeric(RHD.lp$sample)
+rm(temp.mean, temp.sem)
+
+# Left hand speed (visual baseline)
+temp.mean = filter(LHV, trial %in% vb) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(LHV, trial %in% vb) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+LHV.vb = bind_cols(temp.mean, temp.sem)
+LHV.vb$sample = as.numeric(LHV.vb$sample)
+rm(temp.mean, temp.sem)
+
+# Left hand speed (kin baseline)
+temp.mean = filter(LHV, trial %in% kb) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(LHV, trial %in% kb) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+LHV.kb = bind_cols(temp.mean, temp.sem)
+LHV.kb$sample = as.numeric(LHV.kb$sample)
+rm(temp.mean, temp.sem)
+
+# Left hand speed (early exposure)
+temp.mean = filter(LHV, trial %in% ee) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(LHV, trial %in% ee) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+LHV.ee = bind_cols(temp.mean, temp.sem)
+LHV.ee$sample = as.numeric(LHV.ee$sample)
+rm(temp.mean, temp.sem)
+
+# Left hand speed (late exposure)
+temp.mean = filter(LHV, trial %in% le) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(LHV, trial %in% le) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+LHV.le = bind_cols(temp.mean, temp.sem)
+LHV.le$sample = as.numeric(LHV.le$sample)
+rm(temp.mean, temp.sem)
+
+# Left hand speed (early post-exposure)
+temp.mean = filter(LHV, trial %in% ep) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(LHV, trial %in% ep) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+LHV.ep = bind_cols(temp.mean, temp.sem)
+LHV.ep$sample = as.numeric(LHV.ep$sample)
+rm(temp.mean, temp.sem)
+
+# Left hand speed (late post-exposure)
+temp.mean = filter(LHV, trial %in% lp) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(LHV, trial %in% lp) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+LHV.lp = bind_cols(temp.mean, temp.sem)
+LHV.lp$sample = as.numeric(LHV.lp$sample)
+rm(temp.mean, temp.sem)
+
+# Right hand speed (visual baseline)
+temp.mean = filter(RHV, trial %in% vb) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(RHV, trial %in% vb) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+RHV.vb = bind_cols(temp.mean, temp.sem)
+RHV.vb$sample = as.numeric(RHV.vb$sample)
+rm(temp.mean, temp.sem)
+
+# Right hand speed (kin baseline)
+temp.mean = filter(RHV, trial %in% kb) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(RHV, trial %in% kb) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+RHV.kb = bind_cols(temp.mean, temp.sem)
+RHV.kb$sample = as.numeric(RHV.kb$sample)
+rm(temp.mean, temp.sem)
+
+# Right hand speed (early exposure)
+temp.mean = filter(RHV, trial %in% ee) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(RHV, trial %in% ee) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+RHV.ee = bind_cols(temp.mean, temp.sem)
+RHV.ee$sample = as.numeric(RHV.ee$sample)
+rm(temp.mean, temp.sem)
+
+# Right hand speed (late exposure)
+temp.mean = filter(RHV, trial %in% le) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(RHV, trial %in% le) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+RHV.le = bind_cols(temp.mean, temp.sem)
+RHV.le$sample = as.numeric(RHV.le$sample)
+rm(temp.mean, temp.sem)
+
+# Right hand speed (early post-exposure)
+temp.mean = filter(RHV, trial %in% ep) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(RHV, trial %in% ep) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+RHV.ep = bind_cols(temp.mean, temp.sem)
+RHV.ep$sample = as.numeric(RHV.ep$sample)
+rm(temp.mean, temp.sem)
+
+# Right hand speed (late post-exposure)
+temp.mean = filter(RHV, trial %in% lp) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(RHV, trial %in% lp) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+RHV.lp = bind_cols(temp.mean, temp.sem)
+RHV.lp$sample = as.numeric(RHV.lp$sample)
+rm(temp.mean, temp.sem)
+
+# Distance difference: RH - LH (visual baseline)
+temp.mean = filter(Ddiff, trial %in% vb) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(Ddiff, trial %in% vb) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+Ddiff.vb = bind_cols(temp.mean, temp.sem)
+Ddiff.vb$sample = as.numeric(Ddiff.vb$sample)
+rm(temp.mean, temp.sem)
+
+# Distance difference: RH - LH (kin baseline)
+temp.mean = filter(Ddiff, trial %in% kb) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(Ddiff, trial %in% kb) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+Ddiff.kb = bind_cols(temp.mean, temp.sem)
+Ddiff.kb$sample = as.numeric(Ddiff.kb$sample)
+rm(temp.mean, temp.sem)
+
+# Distance difference: RH - LH (early exposure)
+temp.mean = filter(Ddiff, trial %in% ee) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(Ddiff, trial %in% ee) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+Ddiff.ee = bind_cols(temp.mean, temp.sem)
+Ddiff.ee$sample = as.numeric(Ddiff.ee$sample)
+rm(temp.mean, temp.sem)
+
+# Distance difference: RH - LH (late exposure)
+temp.mean = filter(Ddiff, trial %in% le) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(Ddiff, trial %in% le) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+Ddiff.le = bind_cols(temp.mean, temp.sem)
+Ddiff.le$sample = as.numeric(Ddiff.le$sample)
+rm(temp.mean, temp.sem)
+
+# Distance difference: RH - LH (early post-exposure)
+temp.mean = filter(Ddiff, trial %in% ep) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(Ddiff, trial %in% ep) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+Ddiff.ep = bind_cols(temp.mean, temp.sem)
+Ddiff.ep$sample = as.numeric(Ddiff.ep$sample)
+rm(temp.mean, temp.sem)
+
+# Distance difference: RH - LH (late post-exposure)
+temp.mean = filter(Ddiff, trial %in% lp) %>% group_by(subID, group) %>% summarise_all(funs(mean(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "mean", 3:1002)
+temp.sem = filter(Ddiff, trial %in% lp) %>% group_by(subID, group) %>% summarise_all(funs(std.error(.,na.rm = TRUE))) %>% select(-c(trial, measure)) %>% gather("sample", "sem", 3:1002)
+temp.sem = subset(temp.sem, select = sem)
+Ddiff.lp = bind_cols(temp.mean, temp.sem)
+Ddiff.lp$sample = as.numeric(Ddiff.lp$sample)
+rm(temp.mean, temp.sem)
+```
+
+```{r Plotting}
+# LHD Plotting data.frames
+plot.LHD.vb = LHD.vb %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.LHD.kb = LHD.kb %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.LHD.ee = LHD.ee %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.LHD.le = LHD.le %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.LHD.ep = LHD.ep %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.LHD.lp = LHD.lp %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+
+# LHV Plotting data.frames
+plot.LHV.vb = LHV.vb %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.LHV.kb = LHV.kb %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.LHV.ee = LHV.ee %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.LHV.le = LHV.le %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.LHV.ep = LHV.ep %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.LHV.lp = LHV.lp %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+
+# RHD Plotting data.frames
+plot.RHD.vb = RHD.vb %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.RHD.kb = RHD.kb %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.RHD.ee = RHD.ee %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.RHD.le = RHD.le %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.RHD.ep = RHD.ep %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.RHD.lp = RHD.lp %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+
+# RHV Plotting data.frames
+plot.RHV.vb = RHV.vb %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.RHV.kb = RHV.kb %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.RHV.ee = RHV.ee %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.RHV.le = RHV.le %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.RHV.ep = RHV.ep %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.RHV.lp = RHV.lp %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+
+# Ddiff Plotting data.frames
+plot.Ddiff.vb = Ddiff.vb %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.Ddiff.kb = Ddiff.kb %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.Ddiff.ee = Ddiff.ee %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.Ddiff.le = Ddiff.le %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.Ddiff.ep = Ddiff.ep %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+plot.Ddiff.lp = Ddiff.lp %>% group_by(group, sample) %>% summarise_all(funs(mean)) %>% arrange(sample)
+
+ggplot()+
+  geom_point(data = plot.RHD.le, aes(x = sample, y = mean, color = group))+
+  geom_point(data = plot.LHD.le, aes(x = sample, y = mean, color = group))
+
+```
+
